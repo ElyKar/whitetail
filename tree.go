@@ -225,28 +225,3 @@ func lazyParams(path, key, value string, m map[string]string) map[string]string 
 	m[key] = value
 	return m
 }
-
-func (n *node) String(path string, res []string) []string {
-	if n.kind != normal && n.name != "" {
-		path += "/"
-	}
-	if n.kind == named {
-		path += ":"
-	} else if n.kind == catchall {
-		path += "*"
-	} else if n.kind == re {
-		path += "#{" + n.reg.String() + "}"
-	}
-	if n.kind != normal && len(n.name) > 1 {
-		path += n.name[1:]
-	} else if n.kind == normal {
-		path += n.name
-	}
-	for _, v := range n.children {
-		res = v.String(path, res)
-	}
-	if n.handle != nil {
-		res = append(res, path)
-	}
-	return res
-}

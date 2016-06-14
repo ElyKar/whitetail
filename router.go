@@ -1,4 +1,4 @@
-// Whitetail is a lightweight and performant http router.
+// Package whitetail is a lightweight and performant http router.
 // It uses less memory than the well known httprouter,
 // though it loses in terms of pure speed in general.
 //
@@ -57,7 +57,7 @@ type parameters map[string]map[string]string
 
 var params parameters = make(map[string]map[string]string)
 
-// Get the parameters for a given path (deletes it from the router).
+// GetVars fetches the parameters for a given path (deletes it from the router).
 //
 //  func handler(resp http.ReponseWriter, req *http.Request) {
 //      params := whitetail.GetVars(req.UTL.Path)
@@ -79,9 +79,11 @@ func GetVars(path string) map[string]string {
 	return m
 }
 
-// Deletes the parameters associated to a path. If for some
+// DeleteQuietlyVars deletes the parameters associated to a path. If for some
 // reason the handler did not fetch them, you can delete them
 // explicitely, you can delete them to prevent memory leaks.
+//
+// Does not fail, even if there is no such path.
 func DeleteQuietlyVars(path string) {
 	path = clean(path)
 	if _, ok := params[path]; ok {
@@ -115,7 +117,7 @@ type Router struct {
 	NotFoundHandler http.HandlerFunc
 }
 
-// Creates a new router.
+// NewRouter creates a new router.
 func NewRouter() *Router {
 	return &Router{roots: make(map[string]*node)}
 }

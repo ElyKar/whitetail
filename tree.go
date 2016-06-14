@@ -214,7 +214,7 @@ func (root *node) lookup(path string) http.HandlerFunc {
 
 	// Workaround to handle the case where there is a catchall parameter catching only a slash
 	if path[n-1] == '/' && len(current.children) == 1 && current.children[0].kind == catchall {
-		m = lazyParams(path, current.children[0].name[1:], "/", m)
+		_ = lazyParams(path, current.children[0].name[1:], "/", m)
 		return current.children[0].handle
 	}
 

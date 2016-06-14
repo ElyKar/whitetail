@@ -15,7 +15,7 @@ func clean(path string) string {
 	}
 
 	// Do nothing if no cleaning needed
-	if is_clean(path) {
+	if isClean(path) {
 		return path
 	}
 
@@ -88,7 +88,7 @@ func clean(path string) string {
 }
 
 // Assert the given path does not need cleaning
-func is_clean(path string) bool {
+func isClean(path string) bool {
 
 	if path[0] != '/' {
 		return false
@@ -104,9 +104,8 @@ func is_clean(path string) bool {
 		} else {
 			if path[cur-1] == '/' && (cur == n-1 || path[cur+1] == '/' || (path[cur+1] == '.' && (cur+2 == n-1 || path[cur+2] == '/'))) {
 				return false
-			} else {
-				cur += 2
 			}
+			cur += 2
 		}
 	}
 

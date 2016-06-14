@@ -14,6 +14,7 @@ func clean(path string) string {
 		return "/"
 	}
 
+	// Do nothing if no cleaning needed
 	if is_clean(path) {
 		return path
 	}
@@ -86,6 +87,7 @@ func clean(path string) string {
 	return string(buf[:w])
 }
 
+// Assert the given path does not need cleaning
 func is_clean(path string) bool {
 
 	if path[0] != '/' {

@@ -75,8 +75,8 @@ func addChild(root *node, path string, handle http.HandlerFunc) {
 		// If this is not a normal node, there are several checks that need to be performed
 		if k != normal {
 			// In case there is something like '/:' in the path
-			if len(name) == 2 {
-				panic(fmt.Sprintf("Error on path %s: a special parameter must be named", path))
+			if len(name) == 1 {
+				panic(fmt.Sprintf("Error on path %s: a special parameter must be named (%s)", path, name))
 			}
 
 			// Catchall are allowed only for the last node

@@ -1,104 +1,104 @@
-package main
+package whitetail
 
-import (
-	"fmt"
-	"net/http"
-	"strings"
-)
+import "net/http"
 
-type method uint8
+type parameters map[string]map[string]string
 
-const (
-	GET = iota
-	POST
-	PUT
-	PATCH
-	HEAD
-	DELETE
-	nb
-)
+var params parameters = make(map[string]map[string]string)
 
-type Parameters map[string]string
+func GetVars(path string) map[string]string {
+	defer DeleteQuietlyVars(path)
 
-type Handle func(resp http.ResponseWriter, req *http.Request, params Parameters)
-
-var _ http.Handler = NewRouter()
-
-func mthd(method string) method {
-	switch method {
-	case "GET":
-		return GET
-	case "POST":
-		return POST
-	case "PUT":
-		return PUT
-	case "PATCH":
-		return PATCH
-	case "HEAD":
-		return HEAD
-	case "DELETE":
-		return DELETE
-	default:
-		panic(fmt.Sprintf("Unsupported method %s", method))
+	path = clean(path)
+	m, ok := params[path]
+	if !ok {
+		return nil
 	}
+	return m
+}
+
+func DeleteQuietlyVars(path string) {
+	path = clean(path)
+	if _, ok := params[path]; ok {
+		delete(params, path)
+	}
+}
+
+func prepare(path string) map[string]string {
+	m := make(map[string]string)
+	params[path] = m
+	return m
 }
 
 type Router struct {
-	roots []*node
+	roots map[string]*node
 
-	RedirectNotFound Handle
+	PanicHandler func(http.ResponseWriter, *http.Request, interface{})
 
-	PanicHandler Handle
+	NotFoundHandler http.HandlerFunc
 }
 
 func NewRouter() *Router {
-	router := &Router{roots: make([]*node, nb, nb)}
-	for i, _ := range router.roots {
-		router.roots[i] = &node{make([]*node, 0), kind(1), "", nil}
+	return &Router{roots: make(map[string]*node)}
+}
+
+func (r *Router) Handle(method, path string, handle http.HandlerFunc) {
+	root := r.roots[method]
+
+	if root == nil {
+		root = &node{}
+		r.roots[method] = root
 	}
-	return router
+
+	addChild(root, path, handle)
 }
 
-func (r *Router) Handle(method, path string, handle Handle) {
-	cleaned := clean(path)
-	addChild(r.roots[mthd(method)], cleaned, handle)
+func (r *Router) Get(path string, handle http.HandlerFunc) {
+	r.Handle("GET", path, handle)
 }
 
-func (r *Router) Lookup(method, path string) (Handle, Parameters) {
-	return r.roots[mthd(method)].lookup(path)
+func (r *Router) Post(path string, handle http.HandlerFunc) {
+	r.Handle("POST", path, handle)
 }
 
-func (r *Router) Handler(method, path string, handler http.Handler) {
-	r.Handle(method, path, func(resp http.ResponseWriter, req *http.Request, _ Parameters) {
-		handler.ServeHTTP(resp, req)
-	})
+func (r *Router) Put(path string, handle http.HandlerFunc) {
+	r.Handle("PUT", path, handle)
 }
 
-func (r *Router) HandlerFunc(method, path string, handler http.HandlerFunc) {
-	r.Handle(method, path, func(resp http.ResponseWriter, req *http.Request, _ Parameters) {
-		handler(resp, req)
-	})
+func (r *Router) Delete(path string, handle http.HandlerFunc) {
+	r.Handle("DELETE", path, handle)
+}
+
+func (r *Router) Patch(path string, handle http.HandlerFunc) {
+	r.Handle("PATCH", path, handle)
+}
+
+func (r *Router) Lookup(method, path string) http.HandlerFunc {
+	root := r.roots[method]
+
+	if root == nil {
+		return nil
+	}
+
+	return root.lookup(path)
 }
 
 func (r *Router) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
-	defer func() {
-		if err := recover(); err != nil {
-			r.PanicHandler(resp, req, nil)
+	if r.PanicHandler != nil {
+		defer func() {
+			if err := recover(); err != nil {
+				r.PanicHandler(resp, req, err)
+			}
+		}()
+	}
+	path := req.URL.Path
+
+	if root := r.roots[req.Method]; root != nil {
+		handler := root.lookup(path)
+		if handler != nil {
+			handler(resp, req)
+		} else if r.NotFoundHandler != nil {
+			r.NotFoundHandler(resp, req)
 		}
-	}()
-
-	handler, params := r.Lookup(req.Method, req.URL.Path)
-	if handler == nil {
-		fmt.Println("Handler was not found")
-		handler = r.RedirectNotFound
 	}
-	handler(resp, req, params)
-}
-
-func (r *Router) Debug() string {
-	str := ""
-	for _, n := range r.roots {
-		str += strings.Join(n.String("", make([]string, 0)), "\n")
-	}
-	return str
 }

@@ -1,144 +1,263 @@
-package main
+package whitetail
 
 import (
 	"fmt"
-	"strings"
+	"net/http"
+	"regexp"
 )
 
 type kind int8
 
 const (
-	normal   = 1
-	named    = 58
-	wildcard = 42
+	// Normal node
+	normal = 0
+	// Named node
+	named = 58
+	// Catchall node
+	catchall = 42
+	// Regexp node
+	re = 35
 )
 
 type node struct {
+	// The array of childs
 	children []*node
-	kind     kind
-	name     string
-	handle   Handle
+	// The type of nodes
+	kind kind
+	// Name of the parameter
+	name string
+	// Storage of the regexp
+	reg *regexp.Regexp
+	// handle of the node (if any)
+	handle http.HandlerFunc
+	// has a trialing slash - used if the node is a valid route
+	trailingSlash bool
 }
 
-func addChild(root *node, path string, handle Handle) {
-	nodes := strings.Split(path, "/")[1:]
+func addChild(root *node, path string, handle http.HandlerFunc) {
+	if handle == nil {
+		panic(fmt.Sprintf("Must provide a handler for path %s", path))
+	}
+	// Clean the path beforehand
+	path = clean(path)
+
+	// Do some assignations to prepare what's next
 	current := root
+	var i, j, r int
 	var k kind
-	for i, n := range nodes {
+	var name, data string
+	var next *node
+	var regex *regexp.Regexp
+	var err error
+	n := len(path)
 
-		if n[0] == named || n[0] == wildcard {
-			k = kind(n[0])
-			n = n[1:]
-			if len(n) == 0 {
-				panic(fmt.Sprintf("Named and wildcards parameters cannot be empty on path %s", path))
-			}
+	// This iteration is a bit tricky because usually one would iterate through the entire string. Here we iterate until we reached the character before the last one.
+	// In fact, the last character can be a trailing slash, and we do not want to count it as a new node.
+	// If it is not a trailing slash, then it's a letter preceded by a slash (eg '/a') so it enters the loop nonetheless
+	for i < n-1 {
+
+		// Get the next segment of path, it starts with a slash
+		j++
+		for j < n && path[j] != '/' {
+			j++
+		}
+		name = path[i:j]
+		i = j
+
+		// Use the appropriate kind of node for further treatment
+		if name[1] == named || name[1] == catchall || name[1] == re {
+			k = kind(name[1])
+			name = "/" + name[2:]
 		} else {
-			k = 1
+			k = normal
 		}
 
-		if k == wildcard && i != len(nodes)-1 {
-			panic(fmt.Sprintf("Wildcard parameter must be at the end in %s", path))
+		// If this is not a normal node, there are several checks that need to be performed
+		if k != normal {
+			// In case there is something like '/:' in the path
+			if len(name) == 2 {
+				panic(fmt.Sprintf("Error on path %s: a special parameter must be named", path))
+			}
+
+			// Catchall are allowed only for the last node
+			if k == catchall && j < n {
+				panic(fmt.Sprintf("Error on path %s: a catchall parameter can only be at the end", path))
+			}
+
+			// Process the regular expression. The name will contain the id, and the data will be the actual regex
+			if k == re {
+				r = 1
+				for r < len(name) && name[r] != ':' && name[r] != '/' {
+					r++
+				}
+				data = name
+				if r < len(name) {
+					name = name[:r]
+				}
+			}
 		}
 
-		var next *node = nil
-		for _, node := range current.children {
-			if node.name == n {
-				next = node
+		// Check if this node already exist
+		next = nil
+		for _, child := range current.children {
+			if k != child.kind {
+				panic(fmt.Sprintf("Error on path %s: a special parameter cannot have brothers", path))
+			}
+
+			if name == child.name {
+				next = child
 				break
 			}
 		}
 
+		// The child does not exist yet
 		if next == nil {
-			next = &node{
-				children: make([]*node, 0),
-				kind:     k,
-				name:     n,
-				handle:   nil,
-			}
-			current.children = append(current.children, next)
-		} else if next.kind != k {
-			panic(fmt.Sprintf("Cannot insert a parameter which has the same name as %s for path %s", n, path))
-		} else if k == named && n != current.name {
-			panic(fmt.Sprintf("Named parameters mismatch between %s and %s", n, current.name))
-		}
-
-		if next.kind == wildcard && len(current.children) != 1 {
-			panic(fmt.Sprintf("The wildcard in %s is masking other routes", path))
-		}
-		if next.kind == named && len(current.children) != 1 {
-			panic(fmt.Sprintf("The named parameter in %s is masking other routes", path))
-		}
-
-		if i == len(nodes)-1 {
-			if next.handle != nil {
-				panic(fmt.Sprintf("There is already a handle for path %s", path))
+			if k == re {
+				if len(data) < len(name)+2 {
+					panic(fmt.Sprintf("Error on path %s: you must provide a regular expression for parameter %s", path, data))
+				}
+				regex, err = regexp.Compile(data[r+1:])
+				if err != nil {
+					panic(fmt.Sprintf("Error on path %s: the regular expression provided is not correct(%s): [%s]", path, data, err.Error()))
+				}
 			} else {
-				next.handle = handle
+				regex = nil
 			}
+
+			next = &node{
+				kind: k,
+				name: name,
+				reg:  regex,
+			}
+
+			current.children = append(current.children, next)
 		}
 
+		// Move on to the next node
 		current = next
-
 	}
+
+	// Now, assert we can add the handle to this node
+	if current.handle != nil {
+		panic(fmt.Sprintf("There is already a handle for path %s", path))
+	} else if path[len(path)-1] == '/' {
+		current.trailingSlash = true
+	}
+
+	current.handle = handle
+	return
+
 }
 
-func (r *node) lookup(path string) (Handle, Parameters) {
-	current := r
-	nodes := strings.Split(clean(path), "/")[1:]
-	next := current
-	params := make(map[string]string)
-	for i, node := range nodes {
+func (root *node) lookup(path string) http.HandlerFunc {
+
+	var m map[string]string
+
+	path = clean(path)
+	current := root
+	n := len(path)
+	var next *node
+	var i, j int
+	var name string
+
+	for i < n-1 {
+
+		// Get the next segment of path, it starts with a slash
+		j++
+		for j < n && path[j] != '/' {
+			j++
+		}
+		name = path[i:j]
+		i = j
+
 		for _, child := range current.children {
-			if child.kind == wildcard && child.handle != nil {
-				params[child.name] = "/" + strings.Join(nodes[i:], "/")
-				return child.handle, params
-			} else if child.kind == named {
-				params[child.name] = node
+			if child.kind != normal {
 				next = child
 				break
-			} else if child.name == node {
+			}
+
+			if child.name == name {
 				next = child
 				break
 			}
 		}
-		// We didn't find anything
+
 		if next == current {
-			return nil, nil
+			if m != nil {
+				DeleteQuietlyVars(path)
+			}
+			return nil
 		}
+
+		switch next.kind {
+		case catchall:
+			m = lazyParams(path, next.name[1:], path[j-len(name):], m)
+			return next.handle
+
+			// Store the named node
+		case named:
+			m = lazyParams(path, next.name[1:], name[1:], m)
+		case re:
+			if next.reg.MatchString(name[1:]) {
+				m = lazyParams(path, next.name[1:], name[1:], m)
+			} else {
+				if m != nil {
+					DeleteQuietlyVars(path)
+				}
+				return nil
+			}
+		}
+
 		current = next
 
 	}
-	if current.handle != nil {
-		return current.handle, params
+
+	// Workaround to handle the case where there is a catchall parameter catching only a slash
+	if path[n-1] == '/' && len(current.children) == 1 && current.children[0].kind == catchall {
+		m = lazyParams(path, current.children[0].name[1:], "/", m)
+		return current.children[0].handle
 	}
 
-	// UGLY HACK FOR '*' param with empty
-	if len(current.children) == 1 && path[len(path)-1] == '/' {
-		for _, h := range current.children {
-			if h.kind == wildcard {
-				params[h.name] = "/"
-				return h.handle, params
-			}
-		}
-	}
+	return current.handle
+}
 
-	return nil, nil
+// Lazy instantiation of the map of parameters for a route
+func lazyParams(path, key, value string, m map[string]string) map[string]string {
+	if m == nil {
+		m = prepare(path)
+	}
+	m[key] = value
+	return m
 }
 
 func (n *node) String(path string, res []string) []string {
-	if path != "" {
-		path = path + "/"
+	fmt.Printf("I am path '%s' and I have a trailing slash (%v)\n", n.name, n.trailingSlash)
+	for _, c := range n.children {
+		fmt.Printf("One of my child is '%s'\n", c.name)
+	}
+	fmt.Println("")
+	if n.kind != normal && n.name != "" {
+		path += "/"
 	}
 	if n.kind == named {
 		path += ":"
-	} else if n.kind == wildcard {
+	} else if n.kind == catchall {
 		path += "*"
+	} else if n.kind == re {
+		path += "#{" + n.reg.String() + "}"
 	}
-	path += n.name
+	if n.kind != normal && len(n.name) > 1 {
+		path += n.name[1:]
+	} else if n.kind == normal {
+		path += n.name
+	}
 	for _, v := range n.children {
 		res = v.String(path, res)
 	}
 	if n.handle != nil {
+		if n.trailingSlash {
+			path += "/"
+		}
 		res = append(res, path)
 	}
 	return res

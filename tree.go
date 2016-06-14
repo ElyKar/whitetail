@@ -30,8 +30,6 @@ type node struct {
 	reg *regexp.Regexp
 	// handle of the node (if any)
 	handle http.HandlerFunc
-	// has a trialing slash - used if the node is a valid route
-	trailingSlash bool
 }
 
 func addChild(root *node, path string, handle http.HandlerFunc) {
@@ -140,8 +138,6 @@ func addChild(root *node, path string, handle http.HandlerFunc) {
 	// Now, assert we can add the handle to this node
 	if current.handle != nil {
 		panic(fmt.Sprintf("There is already a handle for path %s", path))
-	} else if path[len(path)-1] == '/' {
-		current.trailingSlash = true
 	}
 
 	current.handle = handle
@@ -231,11 +227,6 @@ func lazyParams(path, key, value string, m map[string]string) map[string]string 
 }
 
 func (n *node) String(path string, res []string) []string {
-	fmt.Printf("I am path '%s' and I have a trailing slash (%v)\n", n.name, n.trailingSlash)
-	for _, c := range n.children {
-		fmt.Printf("One of my child is '%s'\n", c.name)
-	}
-	fmt.Println("")
 	if n.kind != normal && n.name != "" {
 		path += "/"
 	}
@@ -255,9 +246,6 @@ func (n *node) String(path string, res []string) []string {
 		res = v.String(path, res)
 	}
 	if n.handle != nil {
-		if n.trailingSlash {
-			path += "/"
-		}
 		res = append(res, path)
 	}
 	return res
